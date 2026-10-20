@@ -1,295 +1,288 @@
-import 'dart:async';
-import 'dart:convert';
-import 'dart:math';
-import 'package:http/http.dart' as http;
+'use strict';
 
-/// Modelo simples para representar mensagens recebidas
-class MailMessage {
-  final String id;
-  final String subject;
-  final String sender;
-  final String textBody;
-  final DateTime? createdAt;
+(() => {
+  // A documentação do Mail.gw informa suporte a CORS. Chamamos a API diretamente,
+  // evitando que um 502 do proxy Python local impeça a criação da caixa.
+  const FILE_MODE = window.location.protocol === 'file:';
+  const API = 'https://api.mail.gw';
+  const $ = (id) => document.getElementById(id);
+  const state = { token: null, accountId: null, address: null, busy: false, messageIds: new Set(), lastRequestAt: 0 };
 
-  MailMessage({
-    required this.id,
-    required this.subject,
-    required this.sender,
-    required this.textBody,
-    this.createdAt,
-  });
-}
+  const setStatus = (message) => { $('status').textContent = message; };
+  const setBusy = (busy) => {
+    state.busy = busy;
+    ['createBtn', 'refreshBtn', 'deleteBtn', 'copyBtn'].forEach((id) => {
+      const el = $(id);
+      if (el) el.disabled = busy || (id === 'createBtn' && FILE_MODE) || (id !== 'createBtn' && !state.token);
+    });
+  };
 
-class MailGwService {
-  static const String _apiBase = 'api.mail.gw';
-  
-  String? token;
-  String? accountId;
-  String? address;
-  bool busy = false;
-
-  /// Método utilitário centralizado para requisições HTTP na API Mail.gw
-  Future<dynamic> _api(
-    String path, {
-    String method = 'GET',
-    Map<String, dynamic>? body,
-    bool auth = true,
-  }) async {
-    if (!path.startsWith('/')) {
-      throw Exception('Destino de rede não permitido.');
-    }
-
-    final url = Uri.https(_apiBase, path);
-    final headers = <String, String>{
-      'Accept': 'application/json',
-    };
-
-    if (body != null) {
-      headers['Content-Type'] = 'application/json';
-    }
-
-    if (token != null && auth) {
-      headers['Authorization'] = 'Bearer $token';
-    }
-
-    http.Response response;
+  async function api(path, options = {}) {
+    if (typeof path !== 'string' || !path.startsWith('/api/')) throw new Error('Destino de rede não permitido.');
+    const upstreamPath = path.slice(4);
+    const url = new URL(upstreamPath, API);
+    if (url.origin !== API || url.pathname.startsWith('//')) throw new Error('Destino de rede não permitido.');
+    const headers = new Headers(options.headers || {});
+    headers.set('Accept', 'application/json');
+    if (options.body) headers.set('Content-Type', 'application/json');
+    if (state.token && options.auth !== false) headers.set('Authorization', `Bearer ${state.token}`);
+    
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => controller.abort(), 15000);
+    let response;
     try {
-      final request = http.Request(method, url)..headers.addAll(headers);
-      if (body != null) {
-        request.body = jsonEncode(body);
-      }
-
-      final streamedResponse = await request.send().timeout(
-        const Duration(seconds: 15),
-      );
-      response = await http.Response.fromStream(streamedResponse);
-    } on TimeoutException {
-      throw Exception('A solicitação excedeu 15 segundos e foi cancelada.');
-    } catch (_) {
-      throw Exception('Não foi possível conectar diretamente à API Mail.gw. Verifique sua conexão.');
+      response = await fetch(url.href, {
+        method: options.method || 'GET',
+        headers,
+        body: options.body ? JSON.stringify(options.body) : undefined,
+        cache: 'no-store',
+        credentials: 'omit',
+        redirect: 'error',
+        referrerPolicy: 'no-referrer',
+        signal: controller.signal
+      });
+    } catch (error) {
+      if (error && error.name === 'AbortError') throw new Error('A solicitação excedeu 15 segundos e foi cancelada.');
+      throw new Error('Não foi possível conectar diretamente à API Mail.gw. Verifique sua internet ou se o provedor está temporariamente indisponível.');
+    } finally {
+      window.clearTimeout(timeoutId);
     }
-
-    // Validação de tamanho máximo da resposta (2MB)
-    if (response.bodyBytes.length > 2 * 1024 * 1024) {
-      throw Exception('Resposta muito grande; solicitação interrompida por segurança.');
+    const raw = await response.text();
+    if (raw.length > 2 * 1024 * 1024) throw new Error('Resposta muito grande; solicitação interrompida por segurança.');
+    let data = {};
+    if (raw) {
+      try { data = JSON.parse(raw); }
+      catch { throw new Error('O serviço retornou uma resposta inesperada.'); }
     }
-
-    dynamic data;
-    if (response.body.isNotEmpty) {
-      try {
-        data = jsonDecode(response.body);
-      } catch (_) {
-        throw Exception('O serviço retornou uma resposta inesperada.');
-      }
-    }
-
-    if (response.statusCode < 200 || response.statusCode >= 300) {
-      final safeMessages = <int, String>{
+    if (!response.ok) {
+      const safeMessages = {
         400: 'O serviço não aceitou os dados enviados. Confira o nome e tente novamente.',
         401: 'Autenticação recusada pelo serviço.',
         403: 'O serviço recusou a operação. Tente novamente mais tarde.',
         404: 'O recurso não foi encontrado no serviço.',
         409: 'Esse endereço já existe. Tente criar outra caixa.',
-        422: 'O serviço não aceitou esse endereço (ele pode já existir ou o domínio pode estar indisponível).',
+        422: 'O serviço não aceitou esse endereço (ele pode já existir ou o domínio pode estar indisponível). Tente novamente.',
         429: 'Muitas solicitações. Aguarde um pouco e tente novamente.',
         500: 'O Mail.gw apresentou um erro interno. Tente novamente mais tarde.',
         502: 'O Mail.gw está temporariamente indisponível (502). Tente novamente mais tarde.',
         503: 'O Mail.gw está em manutenção ou sobrecarregado. Tente novamente mais tarde.',
         504: 'O Mail.gw demorou para responder. Tente novamente.'
       };
-
-      throw Exception(
-        safeMessages[response.statusCode] ?? 'Falha no serviço de e-mail (HTTP ${response.statusCode}).',
-      );
+      throw new Error(safeMessages[response.status] || `Falha no serviço de e-mail (HTTP ${response.status}).`);
     }
-
     return data;
   }
 
-  /// Gera senha segura em formato hexadecimal (semelhante ao crypto.getRandomValues)
-  String _randomPassword() {
-    final random = Random.secure();
-    final values = List<int>.generate(24, (_) => random.nextInt(256));
-    return values.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+  function randomPassword() {
+    const bytes = new Uint8Array(24);
+    crypto.getRandomValues(bytes);
+    return Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('');
   }
 
-  /// Cria uma nova caixa postal temporária
-  Future<String> createMailbox() async {
-    if (busy) throw Exception('Uma operação já está em andamento.');
-    busy = true;
+  function clearMessages() {
+    $('messages').replaceChildren();
+    $('count').textContent = '0';
+    state.messageIds.clear();
+  }
 
+  function addTextMessage(message, bodyText) {
+    const card = document.createElement('article');
+    card.className = 'message';
+    const title = document.createElement('h3');
+    title.textContent = String(message.subject || '(Sem assunto)');
+    const meta = document.createElement('div');
+    meta.className = 'meta';
+    const from = message.from && (message.from.address || message.from.name)
+      ? `${message.from.name || ''} ${message.from.address ? `<${message.from.address}>` : ''}`.trim()
+      : 'Remetente não informado';
+    const date = message.createdAt ? new Date(message.createdAt) : null;
+    meta.textContent = `De: ${from}${date && !Number.isNaN(date.getTime()) ? ' · ' + date.toLocaleString('pt-BR') : ''}`;
+    const body = document.createElement('pre');
+    body.className = 'body-text';
+    body.textContent = bodyText || 'Esta mensagem não contém texto simples. O conteúdo HTML foi ocultado por segurança.';
+    card.append(title, meta, body);
+    $('messages').append(card);
+  }
+
+  async function createMailbox() {
+    if (state.busy) return;
+    let created = false;
+    setBusy(true);
+    setStatus('Consultando domínios disponíveis…');
     try {
-      // 1. Obtém lista de domínios ativos
-      List<String> domains = [];
+      let domains = [];
+      let domainError = null;
       try {
-        final domainData = await _api('/domains?page=1', auth: false);
-        if (domainData != null && domainData['hydra:member'] is List) {
-          final members = domainData['hydra:member'] as List;
-          domains = members
-              .where((d) =>
-                  d != null &&
-                  d['domain'] is String &&
-                  d['isActive'] != false &&
-                  d['isPrivate'] != true)
-              .map((d) => (d['domain'] as String).toLowerCase())
-              .toList();
-        }
+        const domainData = await api('/api/domains?page=1', { auth: false });
+        domains = Array.isArray(domainData['hydra:member']) ? domainData['hydra:member'] : [];
+        domains = domains
+          .filter(d => d && typeof d.domain === 'string' && d.domain &&
+            d.isActive !== false && d.isPrivate !== true)
+          .map(d => d.domain.toLowerCase());
       } catch (err) {
-        // Ignora erro inicial de domínio se necessário
+        domainError = err;
+        console.warn('Não foi possível consultar a lista de domínios:', err);
       }
 
-      if (domains.isEmpty) {
-        throw Exception('O Mail.gw não retornou domínios disponíveis. Tente novamente mais tarde.');
+      if (!domains.length) {
+        if (domainError instanceof Error) {
+          throw new Error(`Não foi possível obter domínios do Mail.gw. ${domainError.message}`);
+        }
+        throw new Error('O Mail.gw respondeu, mas não informou domínios ativos. Tente novamente mais tarde.');
       }
+      const password = randomPassword();
+      let account = null;
+      let address = null;
+      let lastCreateError = null;
 
-      final password = _randomPassword();
-      Map<String, dynamic>? account;
-      String? generatedAddress;
-      Exception? lastCreateError;
-
-      // 2. Tenta criar conta com nomes aleatórios (até 6 tentativas)
-      final random = Random.secure();
-      for (var attempt = 0; attempt < 6; attempt++) {
-        final domain = domains[random.nextInt(domains.length)];
-        final randomBytes = List<int>.generate(7, (_) => random.nextInt(256));
-        final randomPart = randomBytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
-        
-        generatedAddress = 'temp$randomPart@$domain';
-
+      for (let attempt = 0; attempt < 6; attempt++) {
+        const domain = domains[Math.floor(Math.random() * domains.length)];
+        const randomPart = Array.from(
+          crypto.getRandomValues(new Uint8Array(7)),
+          b => b.toString(16).padStart(2, '0')
+        ).join('');
+        address = `temp${randomPart}@${domain}`;
+        setStatus(`Criando endereço aleatório… (tentativa ${attempt + 1} de 6)`);
         try {
-          final res = await _api(
-            '/accounts',
+          account = await api('/api/accounts', {
             method: 'POST',
             auth: false,
-            body: {'address': generatedAddress, 'password': password},
-          );
-          account = res as Map<String, dynamic>;
+            body: { address, password }
+          });
           break;
-        } on Exception catch (err) {
+        } catch (err) {
           lastCreateError = err;
-          if (!err.toString().contains('409') &&
-              !err.toString().contains('422') &&
-              !err.toString().contains('já existe')) {
-            rethrow;
+          // Endereço já ocupado ou domínio rejeitado: gere outro endereço e tente novamente.
+          if (!(err instanceof Error) || !/HTTP 409|HTTP 422|já existe|não aceitou/i.test(err.message)) {
+            throw err;
           }
         }
       }
 
-      if (account == null || generatedAddress == null) {
-        throw Exception(
-          'O serviço recusou os endereços gerados. ${lastCreateError?.toString() ?? ''}',
+      if (!account) {
+        throw new Error(
+          'O serviço recusou os endereços gerados. Isso pode acontecer quando os domínios públicos estão indisponíveis. Tente novamente mais tarde.' +
+          (lastCreateError ? ` (${lastCreateError.message})` : '')
         );
       }
 
-      // 3. Autentica e obtém o token JWT
-      final tokenData = await _api(
-        '/token',
+      const tokenData = await api('/api/token', {
         method: 'POST',
         auth: false,
-        body: {'address': generatedAddress, 'password': password},
-      );
-
-      if (tokenData['token'] == null || account['id'] == null) {
-        throw Exception('O serviço forneceu dados incompletos.');
-      }
-
-      token = tokenData['token'] as String;
-      accountId = account['id'] as String;
-      address = generatedAddress;
-
-      return address!;
-    } finally {
-      busy = false;
-    }
-  }
-
-  /// Busca e detalha as mensagens da caixa criada (processamento paralelo)
-  Future<List<MailMessage>> refreshMessages() async {
-    if (token == null) throw Exception('Nenhuma conta ativa para consultar mensagens.');
-    if (busy) return [];
-    busy = true;
-
-    try {
-      final data = await _api('/messages?page=1');
-      final rawMessages = (data != null && data['hydra:member'] is List)
-          ? data['hydra:member'] as List
-          : [];
-
-      if (rawMessages.isEmpty) {
-        return [];
-      }
-
-      // Busca os detalhes das 10 mensagens mais recentes em paralelo (equivalente ao Promise.all)
-      final topMessages = rawMessages.take(10).toList();
-      final detailsFutures = topMessages.map((msg) async {
-        if (msg == null || msg['id'] == null) return null;
-        try {
-          final String msgId = Uri.encodeComponent(msg['id'].toString());
-          return await _api('/messages/$msgId');
-        } catch (_) {
-          return msg;
-        }
+        body: { address, password }
       });
 
-      final details = await Future.wait(detailsFutures);
-      final List<MailMessage> parsedMessages = [];
-
-      for (final detail in details) {
-        if (detail == null) continue;
-
-        String textBody = '';
-        if (detail['text'] is List) {
-          textBody = (detail['text'] as List).join('\n');
-        } else if (detail['text'] is String) {
-          textBody = detail['text'];
-        }
-
-        String sender = 'Remetente não informado';
-        if (detail['from'] != null) {
-          final fromObj = detail['from'];
-          final name = fromObj['name'] ?? '';
-          final addr = fromObj['address'] != null ? '<${fromObj['address']}>' : '';
-          sender = '$name $addr'.trim();
-        }
-
-        DateTime? createdAt;
-        if (detail['createdAt'] != null) {
-          createdAt = DateTime.tryParse(detail['createdAt'].toString());
-        }
-
-        parsedMessages.add(
-          MailMessage(
-            id: detail['id'].toString(),
-            subject: detail['subject']?.toString() ?? '(Sem assunto)',
-            sender: sender,
-            textBody: textBody.isNotEmpty
-                ? textBody
-                : 'Esta mensagem não contém texto simples. O conteúdo HTML foi ocultado por segurança.',
-            createdAt: createdAt,
-          ),
-        );
+      if (!tokenData.token || !account.id) {
+        throw new Error('O serviço criou uma resposta incompleta e não forneceu os dados esperados.');
       }
+      state.token = tokenData.token;
+      state.accountId = account.id;
+      state.address = address;
 
-      return parsedMessages;
+      $('emailAddress').value = address;
+      $('emailAddress').readOnly = true;
+      $('mailboxArea').hidden = false;
+      clearMessages();
+      setStatus('Caixa criada com sucesso! Use Copiar para copiar o endereço.');
+      created = true;
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : 'Não foi possível criar a caixa.');
     } finally {
-      busy = false;
+      setBusy(false);
+      if (created) await refreshMessages();
     }
   }
 
-  /// Exclui a conta criada no serviço externo
-  Future<void> deleteMailbox() async {
-    if (token == null || accountId == null) return;
-    if (busy) return;
-    busy = true;
-
+  async function refreshMessages() {
+    if (!state.token || state.busy) return;
+    setBusy(true);
+    setStatus('Consultando mensagens…');
     try {
-      final String id = Uri.encodeComponent(accountId!);
-      await _api('/accounts/$id', method: 'DELETE');
+      const data = await api('/api/messages?page=1');
+      const messages = Array.isArray(data['hydra:member']) ? data['hydra:member'] : [];
+      clearMessages();
+      $('count').textContent = String(messages.length);
+      if (!messages.length) {
+        const p = document.createElement('p');
+        p.className = 'muted';
+        p.textContent = 'Nenhuma mensagem recebida ainda.';
+        $('messages').append(p);
+      }
+      for (const msg of messages.slice(0, 30)) {
+        if (!msg || !msg.id) continue;
+        let detail = {};
+        try { detail = await api(`/api/messages/${encodeURIComponent(String(msg.id))}`); }
+        catch { detail = msg; }
+        const textBody = Array.isArray(detail.text) ? detail.text.join('\n') : (typeof detail.text === 'string' ? detail.text : '');
+        addTextMessage(detail, textBody);
+      }
+      setStatus('Consulta concluída. Mensagens exibidas como texto simples.');
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : 'Não foi possível consultar as mensagens.');
     } finally {
-      token = null;
-      accountId = null;
-      address = null;
-      busy = false;
+      setBusy(false);
     }
   }
-}
+
+  async function deleteMailbox() {
+    if (!state.token || state.busy) return;
+    const confirmed = window.confirm('Deseja tentar excluir esta caixa no serviço externo? Esta ação não pode ser desfeita.');
+    if (!confirmed) return;
+    setBusy(true);
+    setStatus('Tentando excluir a caixa…');
+    try {
+      await api(`/api/accounts/${encodeURIComponent(String(state.accountId))}`, { method: 'DELETE' });
+      setStatus('Solicitação de exclusão enviada ao serviço.');
+    } catch (error) {
+      setStatus(`Não foi possível confirmar a exclusão no serviço. ${error instanceof Error ? error.message : ''}`.trim());
+    } finally {
+      state.token = null;
+      state.accountId = null;
+      state.address = null;
+      $('emailAddress').value = '';
+      $('mailboxArea').hidden = true;
+      clearMessages();
+      const p = document.createElement('p');
+      p.className = 'muted';
+      p.textContent = 'Caixa desconectada. A exclusão remota pode não ter sido concluída; confira as regras do provedor.';
+      $('messages').append(p);
+      setBusy(false);
+    }
+  }
+
+  $('createBtn').addEventListener('click', createMailbox);
+  $('refreshBtn').addEventListener('click', refreshMessages);
+  $('deleteBtn').addEventListener('click', deleteMailbox);
+  $('copyBtn').addEventListener('click', async () => {
+    if (!state.address) return;
+    try {
+      await navigator.clipboard.writeText(state.address);
+      setStatus('Endereço copiado.');
+    } catch {
+      $('emailAddress').select();
+      setStatus('Não foi possível copiar automaticamente. Selecione e copie o endereço manualmente.');
+    }
+  });
+
+  window.addEventListener('pagehide', () => {
+    state.token = null;
+    state.accountId = null;
+  });
+
+  setBusy(false);
+  if (FILE_MODE) {
+    setStatus('Para usar a caixa, execute iniciar.bat e abra http://localhost:8000. Não abra index.html diretamente.');
+  }
+  const adsScript = document.querySelector('script[src*="pagead/js/adsbygoogle.js"]');
+  const adSlot = document.querySelector('ins.adsbygoogle');
+  if (adsScript && adSlot) {
+    const pushAd = () => {
+      try {
+        (window.adsbygoogle = window.adsbygoogle || []).push({});
+      } catch {}
+    };
+    if (adsScript.dataset.loaded === 'true') pushAd();
+    else adsScript.addEventListener('load', pushAd, { once: true });
+  }
+
+})();
