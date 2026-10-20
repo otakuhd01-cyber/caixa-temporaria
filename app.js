@@ -23,7 +23,7 @@
   async function api(path, options = {}) {
     if (typeof path !== 'string' || !path.startsWith('/')) throw new Error('Destino de rede não permitido.');
     
-    // Mantém o caminho correto mantendo os recursos da API Mail.gw
+    // Constrói a URL corretamente usando a API base e a rota especificada
     const url = new URL(path, API);
     if (url.origin !== API || url.pathname.startsWith('//')) throw new Error('Destino de rede não permitido.');
     
@@ -225,7 +225,6 @@
         p.textContent = 'Nenhuma mensagem recebida ainda.';
         if ($('messages'))$('messages').append(p);
       } else {
-        // Busca os detalhes das 10 mensagens mais recentes em paralelo para otimizar velocidade
         const details = await Promise.all(
           messages.slice(0, 10).map(async (msg) => {
             if (!msg || !msg.id) return null;
@@ -279,7 +278,7 @@
     }
   }
 
-  // Event Listeners
+  // Registra eventos apenas se os elementos existirem no DOM
   const createBtn = $('createBtn');
   if (createBtn) createBtn.addEventListener('click', createMailbox);
 
@@ -310,10 +309,10 @@
 
   setBusy(false);
   if (FILE_MODE) {
-    setStatus('Modo local (file://) detectado. Se houver problemas de CORS, execute via servidor HTTP.');
+    setStatus('Modo local (file://) detectado. Se houver restrições de CORS no seu navegador, abra via servidor HTTP.');
   }
 
-  // AdSense
+  // Integração opcional do AdSense
   const adsScript = document.querySelector('script[src*="pagead/js/adsbygoogle.js"]');
   const adSlot = document.querySelector('ins.adsbygoogle');
   if (adsScript && adSlot) {
