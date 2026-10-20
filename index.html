@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' https://pagead2.googlesyndication.com https://www.google.com https://tpc.googlesyndication.com; style-src 'self' 'unsafe-inline'; connect-src 'self' https://pagead2.googlesyndication.com https://googleads.g.doubleclick.net https://www.google.com https://www.googletagservices.com; img-src 'self' data: https://pagead2.googlesyndication.com https://googleads.g.doubleclick.net https://tpc.googlesyndication.com; frame-src https://googleads.g.doubleclick.net https://tpc.googlesyndication.com https://www.google.com; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>Caixa Temporária — Mail.gw</title>
+  <link rel="stylesheet" href="style.css">
+  <!-- AdSense: substitua o ID de exemplo pelo seu ID ca-pub real após aprovação da conta. -->
+  <!-- O script oficial está comentado para não carregar anúncios até configurar seu ID. -->
+  <!-- <script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-XXXXXXXXXXXXXXXX" crossorigin="anonymous"></script> -->
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <main class="wrap">
+    <header>
+      <p class="eyebrow">PRIVACIDADE EM PRIMEIRO LUGAR</p>
+      <h1>Caixa de e-mail temporária</h1>
+      <p class="sub">Crie uma caixa temporária e consulte mensagens em texto simples.</p>
+    </header>
+
+    <section class="notice" aria-label="Aviso de privacidade">
+      <strong>Antes de usar</strong>
+      <p>Esta aplicação se conecta ao serviço externo Mail.gw. Não use para informações sensíveis, recuperação de contas importantes ou mensagens privadas. O provedor pode registrar dados técnicos da conexão.</p>
+    </section>
+
+    <section class="ad-panel" aria-label="Espaço para anúncio">
+      <p class="ad-label">Publicidade</p>
+      <!-- Depois de aprovado no AdSense, substitua o client e o slot pelos seus IDs reais. -->
+      <!--
+      <ins class="adsbygoogle"
+           style="display:block"
+           data-ad-client="ca-pub-XXXXXXXXXXXXXXXX"
+           data-ad-slot="XXXXXXXXXX"
+           data-ad-format="auto"
+           data-full-width-responsive="true"></ins>
+      -->
+      <p class="ad-placeholder">Espaço reservado para anúncio do Google AdSense</p>
+    </section>
+
+    <section class="panel">
+      <h2>1. Criar caixa</h2>
+      <p>Gere um endereço aleatório automaticamente. O endereço não pode ser editado; use o botão Copiar para utilizá-lo.</p>
+      <div class="line">
+        <button id="createBtn" type="button">Gerar e-mail aleatório</button>
+      </div>
+      <p id="status" class="status" role="status" aria-live="polite">Nenhuma caixa criada.</p>
+      <div id="mailboxArea" hidden>
+        <label for="emailAddress">Endereço criado</label>
+        <div class="line">
+          <input id="emailAddress" type="text" readonly aria-readonly="true" autocomplete="off" spellcheck="false">
+          <button id="copyBtn" class="secondary" type="button">Copiar</button>
+        </div>
+        <p class="small">A senha é gerada automaticamente e fica apenas na memória desta página. Não atualize a página antes de terminar.</p>
+        <div class="line actions">
+          <button id="refreshBtn" type="button">Atualizar mensagens</button>
+          <button id="deleteBtn" class="danger" type="button">Excluir caixa</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="section-head">
+        <h2>2. Mensagens</h2>
+        <span id="count" class="count">0</span>
+      </div>
+      <div id="messages" class="messages">
+        <p class="muted">Crie uma caixa para consultar mensagens.</p>
+      </div>
+      <p class="small">Por segurança, o conteúdo HTML de e-mails não é executado nem exibido como página. Esta versão mostra apenas texto simples fornecido pelo serviço.</p>
+    </section>
+
+    <footer>
+      <p>Versão revisada: integração do AdSense preparada, mas desativada até inserir seus identificadores oficiais.</p>
+      <p>Não é uma auditoria profissional nem uma garantia absoluta de segurança.</p>
+    </footer>
+  </main>
+</body>
+</html>
